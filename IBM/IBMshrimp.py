@@ -223,7 +223,7 @@ class PelagicShrimpDrift(OpenDrift3DSimulation, PelagicShrimp):
         #
         self.vertical_mixing() #Mixes the eggs according to terminal_velocity calculation
         if self.get_config('processes:verticalmodule') is True:
-            self.vp.vertical_module()
+            vp.vertical_module(self)
         
         # Plankton development
         self.updateEggStages()

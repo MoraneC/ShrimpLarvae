@@ -16,6 +16,12 @@
 
 ### COPIED FROM OPENDRIFT3DSIMULATION the Vertical_Mixing function
 
+import numpy as np
+import logging
+from scipy.interpolate import interp1d
+from opendrift.models.basemodel import OpenDriftSimulation
+from opendrift.elements import LagrangianArray
+
 def vertical_module(self):
     """Mix particles vertically according to eddy diffusivity and buoyancy
     

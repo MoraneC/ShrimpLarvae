@@ -17,6 +17,20 @@
 
 # Function to interpolate the variable sea_floor_depth_below_sea_level saved in the 'o' IBM to the coordinates of the particles.
 # Adapted from get_variables_interpolated in basereader.py
+import sys
+import logging
+import copy
+from bisect import bisect_left
+from abc import abstractmethod, ABCMeta
+from datetime import timedelta, datetime
+
+from opendrift.readers.basereader import BaseReader, vector_pairs_xy
+from scipy.interpolate import LinearNDInterpolator
+from scipy.ndimage import map_coordinates
+import numpy as np
+
+from opendrift.readers.interpolation import ReaderBlock
+
 
 def get_2Dvar_interp(self, variables, time=None,
                                 lon=None, lat=None,
