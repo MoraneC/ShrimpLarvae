@@ -19,7 +19,7 @@ import numpy as np
 from datetime import datetime, timedelta
 
 from opendrift.models.opendrift3D import OpenDrift3DSimulation, Lagrangian3DArray
-from ShrimpLarvae.IBMFunction.opendrift3DAdd import OpenDrift3DAdd
+import Vertical_module as vp
 from opendrift.elements import LagrangianArray
 
 
@@ -223,7 +223,7 @@ class PelagicShrimpDrift(OpenDrift3DSimulation, PelagicShrimp):
         #
         self.vertical_mixing() #Mixes the eggs according to terminal_velocity calculation
         if self.get_config('processes:verticalmodule') is True:
-            self.vertical_module()
+            self.vp.vertical_module()
         
         # Plankton development
         self.updateEggStages()
