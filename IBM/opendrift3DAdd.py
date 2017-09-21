@@ -16,49 +16,6 @@
 
 ### COPIED FROM OPENDRIFT3DSIMULATION the Vertical_Mixing function
 
-import numpy as np
-import logging
-from scipy.interpolate import interp1d
-from opendrift.models.basemodel import OpenDriftSimulation
-from opendrift.elements import LagrangianArray
-
-
-class OpenDrift3DAdd(OpenDriftSimulation):
-    """Open source buoyant particle trajectory model based on OpenDrift.
-
-        Developed at MET Norway
-
-        Generic module for particles that move in 3 dimensions
-        and may be to vertical turbulent mixing
-        with the possibility for positive or negative buoyancy
-
-        Particles could be e.g. oil droplets, plankton, nutrients or sediments
-
-        Under construction.
-    """
-
-    max_speed = 1  # m/s
-
-    def __init__(self, *args, **kwargs):
-
-        configspec_oceandrift3D = '''
-            [drift]
-                max_age_seconds = float(min=0, default=None)
-            [processes]
-                turbulentmixing = boolean(default=True)
-                verticaladvection = boolean(default=True)
-            [turbulentmixing]
-                timestep = float(min=0.1, max=3600, default=4.)
-                verticalresolution = float(min=0.01, max=10, default = 2.)
-                diffusivitymodel = option('environment', 'stepfunction', 'windspeed_Sundby1983', 'gls_tke', default='environment')
-                TSprofiles = boolean(default=True)
-                '''
-        self._add_configstring(configspec_oceandrift3D)
-
-        # Calling general constructor of parent class
-        super(OpenDrift3DAdd, self).__init__(*args, **kwargs)
-
-
     def vertical_module(self):
         """Mix particles vertically according to eddy diffusivity and buoyancy
         
