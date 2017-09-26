@@ -19,20 +19,20 @@
 # Adapted from get_variables_interpolated in basereader.py
 import sys
 import logging
-import copy
 from bisect import bisect_left
-from abc import abstractmethod, ABCMeta
 from datetime import timedelta, datetime
+from scipy.interpolate import interp2d
 
 from opendrift.readers.basereader import BaseReader, vector_pairs_xy
 from scipy.interpolate import LinearNDInterpolator
 from scipy.ndimage import map_coordinates
 import numpy as np
+from netCDF4 import MFDataset
 
 from opendrift.readers.interpolation import ReaderBlock
 
 
-def get_2Dvar_interp(self, variables, time=None,
+def get_2DBathy_interp(self, variables, time=None,
                                 lon=None, lat=None,
                                 rotate_to_proj=None):
     ### Set the z-axes information to None
@@ -62,8 +62,7 @@ def get_2Dvar_interp(self, variables, time=None,
     if time == time_before:
         time_after = None
 
-    reader_x, reader_y = self.lonlat2xy(lon[ind_covered],
-                                            lat[ind_covered])
+    reader_x, reader_y = self.lonlat2xy(lon[ind_covered],lat[ind_covered])
             
     if block is False or self.return_block is False:
         # Analytical reader, continous in space and time
@@ -225,8 +224,3 @@ def get_2Dvar_interp(self, variables, time=None,
         Bathy=-Bathy
 
     return Bathy, env
-
-### Bathy is the array of values, env is the details of the interpolation (x and y position in roms)
-
-
-

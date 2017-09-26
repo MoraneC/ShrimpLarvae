@@ -47,7 +47,7 @@ class PelagicShrimp(Lagrangian3DArray):
         ('TotalLength',{'dtype':np.float32,
                         'units':'mm',
                         'default':4.26}),
-        ('settlement_velocity',{'dtype':np.float32,
+        ('particles_velocity',{'dtype':np.float32,
                         'units':'m/s',
                         'default':0.}),
         ('stages', {'dtype': np.int16,
@@ -56,7 +56,7 @@ class PelagicShrimp(Lagrangian3DArray):
 
     def updateEggStages(self):
         self.elements.stages[self.elements.age_seconds >= self.elements.duration] += 1
-        self.elements.stages[np.any(self.elements.stages>=4)] = 4
+        self.elements.stages[self.elements.stages>=4] = 4
 
     def updateEggDuration(self):
         Temperature=self.environment.sea_water_temperature[np.all([self.elements.age_seconds >= self.elements.duration,self.elements.stages < 4],0)]
@@ -102,8 +102,8 @@ class PelagicShrimpDrift(OpenDrift3DSimulation, PelagicShrimp):
     # The vertical levels are available as
     # self.environment_profiles['z'] or
     # self.environment_profiles['sigma'] (not yet implemented)
-    required_profiles = ['sea_water_temperature','sea_water_salinity']#,                         'ocean_vertical_diffusivity']
-    required_profiles_z_range = [-1500, 0]  # The depth range (in m) which
+    required_profiles = ['sea_water_temperature','sea_water_salinity','ocean_vertical_diffusivity']
+    required_profiles_z_range = [-2000, 0]  # The depth range (in m) which
                                           # profiles shall cover
 
     fallback_values = {'x_sea_water_velocity': 0,
@@ -113,9 +113,9 @@ class PelagicShrimpDrift(OpenDrift3DSimulation, PelagicShrimp):
                        #'sea_ice_area_fraction': 0,
                        'x_wind': 0, 'y_wind': 0,
                        'sea_floor_depth_below_sea_level': 10,
-                       'ocean_vertical_diffusivity': 0.02,  # m2s-1
-                       'sea_water_temperature': 10.,
-                       'sea_water_salinity': 34.,
+                       'ocean_vertical_diffusivity': 0.002,  # m2s-1
+                       'sea_water_temperature': 12.,
+                       'sea_water_salinity': 37.,
                        'surface_downward_x_stress': 0,
                        'surface_downward_y_stress': 0,
                        #'turbulent_kinetic_energy': 0,
@@ -131,6 +131,8 @@ class PelagicShrimpDrift(OpenDrift3DSimulation, PelagicShrimp):
             turbulentmixing = boolean(default=False)
             verticaladvection = boolean(default=True)
             verticalmodule = boolean(default=False)
+            buoyancyparticles = boolean(default=True)
+            Vlimparticles = boolean(default=False)
         [turbulentmixing]
             timestep = float(min=0.1, max=3600, default=1.)
             verticalresolution = float(min=0.01, max=10, default = 1.)
@@ -143,7 +145,7 @@ class PelagicShrimpDrift(OpenDrift3DSimulation, PelagicShrimp):
         # Calling general constructor of parent class
         super(PelagicShrimpDrift, self).__init__(*args, **kwargs)
         self._add_config('processes:verticalmodule', 'boolean(default=False)', comment='buoyancy and swimming')
-    
+        self._add_config('processes:buoyancyparticles', 'boolean(default=True)', comment='vlim from buoyancy')
         
     def VerticalSettlementSwimming(self):
     # Computing the velocity of PL to go down according to the size of the PL: velocity is Total Length/s
@@ -151,29 +153,26 @@ class PelagicShrimpDrift(OpenDrift3DSimulation, PelagicShrimp):
         #
         for ind in xrange(len(self.elements.lat)):
             if Larvaestages[ind]==4:
-                self.elements.settlement_velocity[ind] = -self.elements.TotalLength[ind]*(10**-3) # m/s
+                self.elements.particles_velocity[ind] = -self.elements.TotalLength[ind]*(10**-3) # m/s
     
 
 
     def update_terminal_velocity(self, Tprofiles=None, Sprofiles=None, z_index=None):
         """Calculate terminal velocity for Pelagic Egg
-
         according to
         S. Sundby (1983): A one-dimensional model for the vertical distribution
         of pelagic fish eggs in the mixed layer
         Deep Sea Research (30) pp. 645-661
-
         Method copied from ibm.f90 module of LADIM:
         Vikebo, F., S. Sundby, B. Aadlandsvik and O. Otteraa (2007),
         Fish. Oceanogr. (16) pp. 216-228
         """
         g = 9.81  # ms-2
-
+        
         # Pelagic Egg properties that determine buoyancy
         eggsize = self.elements.diameter  # 0.0003 for Shrimp
         eggdensity= self.elements.density
-        # 31.25 for NEA Cod
-
+                   
         T0 = self.environment.sea_water_temperature
         S0 = self.environment.sea_water_salinity
 
@@ -203,13 +202,13 @@ class PelagicShrimpDrift(OpenDrift3DSimulation, PelagicShrimp):
         d0 = (eggsize * 100) - 0.4 * \
             (9.0 * my_w**2 / (100 * g) * DENSw / dr)**(1.0 / 3.0)  # cm
         W2 = 19.0*d0*(0.001*dr)**(2.0/3.0)*(my_w*0.001*DENSw)**(-1.0/3.0)
-        # cm/s
+            # cm/s
         W2 = W2/100.  # back to m/s
 
         W[highRe] = W2[highRe]
+
         W[self.elements.stages >= self.elements.stages_end_buoyancy]=0
         self.elements.terminal_velocity = W
-
 
     def update(self):
         """Update positions and properties of particles."""
