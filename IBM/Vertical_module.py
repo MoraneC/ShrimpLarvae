@@ -21,18 +21,15 @@ import logging
 from scipy.interpolate import interp1d
 from opendrift.models.basemodel import OpenDriftSimulation
 from opendrift.elements import LagrangianArray
+from opendrift.models.opendrift3D import OpenDrift3DSimulation
 
 def vertical_module(self):
-    """Mix particles vertically according to eddy diffusivity and buoyancy
+    """Give to particles a  vertical speed according to buoyancy or settlement velocity at PL
     
     Buoyancy is expressed as terminal velocity, which is the
     steady-state vertical velocity due to positive or negative
     buoyant behaviour. It is usually a function of particle density,
     diameter, and shape.
-    
-    Vertical particle displacemend du to turbulent mixing is
-    calculated using the "binned random walk scheme" (Thygessen and
-    Aadlandsvik, 2007).
     The formulation of this scheme is copied from LADIM (IMR).
     """
     
@@ -41,9 +38,8 @@ def vertical_module(self):
         return
 
     self.timer_start('main loop:updating elements: Vertical Module')
-    from opendrift.models import eddydiffusivity
 
-    dt_mix = self.time_step.total_seconds()
+    dt = self.time_step.total_seconds()
 
     # minimum height/maximum depth for each particle
     Zmin = -1.*self.environment.sea_floor_depth_below_sea_level
@@ -81,15 +77,10 @@ def vertical_module(self):
     # internal loop for fast time step of vertical mixing model
     # binned random walk needs faster time step compared
     # to horizontal advection
-    ntimes_mix = np.abs(int(self.time_step.total_seconds()/dt_mix))
-    logging.debug('Vertical mixing module:')
-    logging.debug('turbulent diffusion with binned random walk scheme')
-    logging.debug('using ' + str(ntimes_mix) + ' fast time steps of dt=' +
-                    str(dt_mix) + 's')
-    for i in range(0, ntimes_mix):
-        #remember which particles belong to the exact surface
-        surface = self.elements.z == 0
 
+    #remember which particles belong to the exact surface
+    surface = self.elements.z == 0
+    if self.get_config('processes:Buoyancy') is True:
         # update terminal velocity according to environmental variables
         if self.get_config('turbulentmixing:TSprofiles') is True:
             self.update_terminal_velocity(Tprofiles=Tprofiles,
@@ -99,32 +90,38 @@ def vertical_module(self):
             # this is faster, but ignores density gradients in
             # water column for the inner loop
             self.update_terminal_velocity()
-            
-        logging.debug('Terminal Velocity ' + str(np.mean(self.elements.terminal_velocity)))
-        w =  self.elements.terminal_velocity + self.elements.settlement_velocity
+        w = self.elements.terminal_velocity
+        logging.debug('Terminal Velocity is ' + str(np.mean(self.elements.terminal_velocity)))
+    else:
+        w = 0
+    if self.get_config('processes:Settlement') is True: # Personal added line to make particles going in the vertical layer, now, just a constant velocity activated at PostLarvae stages.
+        w += self.elements.particles_velocity
+        logging.debug('Settlement Velocity is' + str(np.mean(self.elements.particles_velocity)))
 
-        # calculate rise/sink probability dependent on K and w
 
-        self.elements.z = self.elements.z + dt_mix*w # move according to buoyancy and/or settlement velocity.
+    self.elements.z = self.elements.z + dt*w # move according to buoyancy and/or settlement velocity.
 
-        # put the particles that belong to the surface slick (if present) back to the surface
-        self.elements.z[surface] = 0.
+    # put the particles that belong to the surface slick (if present) back to the surface
+    self.elements.z[surface] = 0.
 
-        #avoid that elements are below bottom
-        bottom = np.where(self.elements.z < Zmin)
-        if len(bottom[0]) > 0:
-            self.elements.z[bottom] = np.round(Zmin[bottom]) + 0.5
+    #avoid that elements are below bottom
+    bottom = np.where(self.elements.z < Zmin)
+    if len(bottom[0]) > 0:
+        self.elements.z[bottom] = np.round(Zmin[bottom]) + 0.5
 
-        # Call surface interaction:
-        # reflection at surface or formation of slick and wave mixing if implemented for this class
-        self.surface_interaction(dt_mix)
+    # Call surface interaction:
+    # reflection at surface or formation of slick and wave mixing if implemented for this class
+    self.surface_interaction(dt)
+
 
 def vertical_mixing(self):
-    """Mix particles vertically according to eddy diffusivity and buoyancy
+    """Mix particles vertically according to eddy diffusivity, buoyancy and Settlement Velocity of PL
+
         Buoyancy is expressed as terminal velocity, which is the
         steady-state vertical velocity due to positive or negative
         buoyant behaviour. It is usually a function of particle density,
         diameter, and shape.
+
         Vertical particle displacemend du to turbulent mixing is
         calculated using the "binned random walk scheme" (Thygessen and
         Aadlandsvik, 2007).
@@ -149,10 +146,11 @@ def vertical_mixing(self):
     surface = self.elements.z == 0
     self.elements.z[~surface] = np.round(self.elements.z[~surface]/dz)*dz
 
-    #avoid that elements are below bottom
+    # Prevent elements to go below seafloor
     bottom = np.where(self.elements.z < Zmin)
     if len(bottom[0]) > 0:
-        self.elements.z[bottom] = np.round(Zmin/dz)*dz + dz/2.
+        logging.debug('%s elements penetrated seafloor, lifting up' % len(bottom[0]))
+        self.elements.z[bottom] = np.round(Zmin[bottom]/dz)*dz + dz/2.
 
     # Eventual model specific preparions
     self.prepare_vertical_mixing()
@@ -178,7 +176,8 @@ def vertical_mixing(self):
         Kprofiles = getattr(
             eddydiffusivity,
             self.get_config('turbulentmixing:diffusivitymodel'))(self)
-        logging.debug('Diffiusivities are in range %s to %s.' %
+
+    logging.debug('Diffiusivities are in range %s to %s.' %
                     (Kprofiles.min(), Kprofiles.max()))
 
     # get profiles of salinity and temperature
@@ -212,20 +211,24 @@ def vertical_mixing(self):
     logging.debug('using ' + str(ntimes_mix) + ' fast time steps of dt=' +
                     str(dt_mix) + 's')
     for i in range(0, ntimes_mix):
-        #remember which particles belong to the exact surface
+            #remember which particles belong to the exact surface
         surface = self.elements.z == 0
+        if self.get_config('processes:Buoyancy') is True:
+            # update terminal velocity according to environmental variables
+            if self.get_config('turbulentmixing:TSprofiles') is True:
+                self.update_terminal_velocity(Tprofiles=Tprofiles,
+                                              Sprofiles=Sprofiles,
+                                              z_index=z_index)
+            else:
+                # this is faster, but ignores density gradients in
+                # water column for the inner loop
+                self.update_terminal_velocity()
 
-        # update terminal velocity according to environmental variables
-        if self.get_config('turbulentmixing:TSprofiles') is True:
-            self.update_terminal_velocity(Tprofiles=Tprofiles,
-                                            Sprofiles=Sprofiles,
-                                            z_index=z_index)
+            w = self.elements.terminal_velocity
         else:
-            # this is faster, but ignores density gradients in
-            # water column for the inner loop
-            self.update_terminal_velocity()
-
-        w = self.elements.terminal_velocity
+            w = 0
+        if self.get_config('processes:Settlement') is True:
+            w += self.elements.particles_velocity
 
         # diffusivity K at depth z
         zi = z_index(-self.elements.z)
@@ -254,7 +257,7 @@ def vertical_mixing(self):
         p = dt_mix * (2.0*K1 + dz*w)/(2.0*dz*dz)  # probability to rise
         q = dt_mix * (2.0*K2 - dz*w)/(2.0*dz*dz)  # probability to sink
 
-            # check if probabilities are reasonable or wrong; which can happen if K is very high (K>0.1)
+        # check if probabilities are reasonable or wrong; which can happen if K is very high (K>0.1)
         wrong = p+q > 1.00002
         if wrong.sum() > 0:
             logging.info('WARNING! '+str(wrong.sum())+' elements have p+q>1; you might need a smaller mixing time step')
@@ -273,13 +276,16 @@ def vertical_mixing(self):
         # put the particles that belong to the surface slick (if present) back to the surface
         self.elements.z[surface] = 0.
 
-        #avoid that elements are below bottom
+        # Prevent elements to go below seafloor
         bottom = np.where(self.elements.z < Zmin)
         if len(bottom[0]) > 0:
-            self.elements.z[bottom] = np.round(Zmin/dz)*dz + dz/2.
+            logging.debug('%s elements penetrated seafloor, lifting up' % len(bottom[0]))
+            self.elements.z[bottom] = np.round(Zmin[bottom]/dz)*dz + dz/2.
 
         # Call surface interaction:
         # reflection at surface or formation of slick and wave mixing if implemented for this class
         self.surface_interaction(dt_mix)
 
     self.timer_end('main loop:updating elements:vertical mixing')
+
+
