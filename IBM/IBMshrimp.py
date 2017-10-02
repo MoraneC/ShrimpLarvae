@@ -43,7 +43,7 @@ class PelagicShrimp(Lagrangian3DArray):
                       'default': 1.74*86400}),
         ('stages_end_buoyancy', {'dtype': np.int16,
                                  'units': '[]',
-                                 'default': 1}),
+                                 'default': 2}),
         ('TotalLength',{'dtype':np.float32,
                         'units':'mm',
                         'default':4.26}),
@@ -145,7 +145,8 @@ class PelagicShrimpDrift(OpenDrift3DSimulation, PelagicShrimp):
         # Calling general constructor of parent class
         super(PelagicShrimpDrift, self).__init__(*args, **kwargs)
         self._add_config('processes:verticalmodule', 'boolean(default=False)', comment='buoyancy and swimming')
-        self._add_config('processes:buoyancyparticles', 'boolean(default=True)', comment='vlim from buoyancy')
+        self._add_config('processes:Settlement', 'boolean(default=False)', comment='Settlement swimming')
+        self._add_config('processes:Buoyancy', 'boolean(default=False)', comment='buoyancy')
         
     def VerticalSettlementSwimming(self):
     # Computing the velocity of PL to go down according to the size of the PL: velocity is Total Length/s
@@ -167,60 +168,46 @@ class PelagicShrimpDrift(OpenDrift3DSimulation, PelagicShrimp):
         Vikebo, F., S. Sundby, B. Aadlandsvik and O. Otteraa (2007),
         Fish. Oceanogr. (16) pp. 216-228
         """
-        if self.get_config('processes:buoyancyparticles') is True:
-            g = 9.81  # ms-2
+        g = 9.81  # ms-2
         
-            # Pelagic Egg properties that determine buoyancy
-            eggsize = self.elements.diameter  # 0.0003 for Shrimp
-            eggdensity= self.elements.density
+        # Pelagic Egg properties that determine buoyancy
+        eggsize = self.elements.diameter  # 0.0003 for Shrimp
+        eggdensity= self.elements.density
                    
-            T0 = self.environment.sea_water_temperature
-            S0 = self.environment.sea_water_salinity
+        T0 = self.environment.sea_water_temperature
+        S0 = self.environment.sea_water_salinity
 
-            # The density difference bettwen a pelagic egg and the ambient water
-            # is regulated by their salinity difference through the
-            # equation of state for sea water.
-            # The Egg has the same temperature as the ambient water and its
-            # salinity is regulated by osmosis through the egg shell.
-            DENSw = self.sea_water_density(T=T0, S=S0)
-            DENSegg = eggdensity
-            dr = DENSw-DENSegg  # density difference
+        # The density difference bettwen a pelagic egg and the ambient water
+        # is regulated by their salinity difference through the
+        # equation of state for sea water.
+        # The Egg has the same temperature as the ambient water and its
+        # salinity is regulated by osmosis through the egg shell.
+        DENSw = self.sea_water_density(T=T0, S=S0)
+        DENSegg = eggdensity
+        dr = DENSw-DENSegg  # density difference
 
-            # water viscosity
-            my_w = 0.001*(1.7915 - 0.0538*T0 + 0.007*(T0**(2.0)) - 0.0023*S0)
-            # ~0.0014 kg m-1 s-1
+        # water viscosity
+        my_w = 0.001*(1.7915 - 0.0538*T0 + 0.007*(T0**(2.0)) - 0.0023*S0)
+        # ~0.0014 kg m-1 s-1
+            
+        # terminal velocity for low Reynolds numbers
+        W = (1.0/my_w)*(1.0/18.0)*g*eggsize**2 * dr
+    
+        #check if we are in a Reynolds regime where Re > 0.5
+        highRe = np.where(W*1000*eggsize/my_w > 0.5)
 
-            # terminal velocity for low Reynolds numbers
-            W = (1.0/my_w)*(1.0/18.0)*g*eggsize**2 * dr
-        
-            #check if we are in a Reynolds regime where Re > 0.5
-            highRe = np.where(W*1000*eggsize/my_w > 0.5)
-
-            # Use empirical equations for terminal velocity in
-            # high Reynolds numbers.
-            # Empirical equations have length units in cm!
-            my_w = 0.01854 * np.exp(-0.02783 * T0)  # in cm2/s
-            d0 = (eggsize * 100) - 0.4 * \
-            (9.0 * my_w**2 / (100 * g) * DENSw / dr)**(1.0 / 3.0)  # cm
-            W2 = 19.0*d0*(0.001*dr)**(2.0/3.0)*(my_w*0.001*DENSw)**(-1.0/3.0)
-            # cm/s
-            W2 = W2/100.  # back to m/s
-
-            W[highRe] = W2[highRe]
-        
-        else:
-            if np.any(self.time) == self.start_time:
-                depth=self.elements.z
-                duration=self.elements.duration
-                if np.all(self.elements.stages_end_buoyancy) == 2:
-                    duration += (np.exp(-0.076 * self.environment.sea_water_temperature +2.79))*86400
-                W = -1.*depth/duration # m/s at depth could be added the layer where I want to arrive.
-                self.elements.particles_velocity=W
-            else:
-                W = self.elements.particles_velocity
-        
+        # Use empirical equations for terminal velocity in
+        # high Reynolds numbers.
+        # Empirical equations have length units in cm!
+        my_w = 0.01854 * np.exp(-0.02783 * T0)  # in cm2/s
+        d0 = (eggsize * 100) - 0.4 * \
+        (9.0 * my_w**2 / (100 * g) * DENSw / dr)**(1.0 / 3.0)  # cm
+        W2 = 19.0*d0*(0.001*dr)**(2.0/3.0)*(my_w*0.001*DENSw)**(-1.0/3.0)
+        # cm/s
+        W2 = W2/100.  # back to m/s
+        W[highRe] = W2[highRe]
+    
         W[self.elements.stages >= self.elements.stages_end_buoyancy]=0
-        self.elements.particles_velocity = W
         self.elements.terminal_velocity = W
 
     def update(self):
@@ -233,7 +220,7 @@ class PelagicShrimpDrift(OpenDrift3DSimulation, PelagicShrimp):
         self.update_terminal_velocity() ### Buoyancy velocity
         self.VerticalSettlementSwimming()
         #
-        self.vertical_mixing() #Mixes the eggs according to terminal_velocity calculation
+        vp.vertical_mixing(self) #Mixes the eggs according to terminal_velocity calculation
         if self.get_config('processes:verticalmodule') is True:
             vp.vertical_module(self)
         
