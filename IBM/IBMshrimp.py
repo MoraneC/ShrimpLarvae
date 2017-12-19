@@ -131,7 +131,7 @@ class PelagicShrimpDrift(OpenDrift3DSimulation, PelagicShrimp):
     # Configuration
     configspec = '''
         [drift]
-            scheme = string(default='runge kunta')
+            scheme = string(default='runge-kutta')
         [processes]
             turbulentmixing = boolean(default=False)
             verticaladvection = boolean(default=True)
@@ -169,8 +169,7 @@ class PelagicShrimpDrift(OpenDrift3DSimulation, PelagicShrimp):
 
 
     def update_terminal_velocity(self, Tprofiles=None, Sprofiles=None, z_index=None):
-        """Calculate terminal velocity for Pelagic Egg
-        according to
+        """Calculate terminal velocity for Pelagic Egg according to
         S. Sundby (1983): A one-dimensional model for the vertical distribution
         of pelagic fish eggs in the mixed layer
         Deep Sea Research (30) pp. 645-661
@@ -233,7 +232,7 @@ class PelagicShrimpDrift(OpenDrift3DSimulation, PelagicShrimp):
         vp.vertical_module(self) # will be accounted if verticalmodule is TRUE
         vp.horizontal_mixing(self,'output')
         
-        # Plankton development
+        # Larval development
         self.updateEggStages()
         self.updateEggDuration()
 
