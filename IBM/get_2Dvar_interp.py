@@ -102,15 +102,7 @@ def get_2DBathy_interp(self, variables, time=None,
             self.var_block_before[str(variables)] = \
                 ReaderBlock(reader_data_dict,
                             interpolation_horizontal=self.interpolation)
-            try:
-                len_z = len(self.var_block_before[str(variables)].z)
-            except:
-                len_z = 1
-            logging.debug(('Fetched env-block (size %ix%ix%i) ' +
-                            'for time before (%s)') %
-                            (len(self.var_block_before[str(variables)].x),
-                            len(self.var_block_before[str(variables)].y),
-                            len_z, time_before))
+
         if not str(variables) in self.var_block_after or \
                 self.var_block_after[str(variables)].time != time_after:
             if time_after is None:
@@ -126,18 +118,6 @@ def get_2DBathy_interp(self, variables, time=None,
                     ReaderBlock(
                         reader_data_dict,
                         interpolation_horizontal=self.interpolation)
-                try:
-                    len_z = len(self.var_block_after[str(variables)].z)
-                except:
-                    len_z = 1
-
-                logging.debug(('Fetched env-block (size %ix%ix%i) ' +
-                                'for time after (%s)') %
-                                (len(self.var_block_after[
-                                    str(variables)].x),
-                                len(self.var_block_after[
-                                    str(variables)].y),
-                                len_z, time_after))
 
         if self.var_block_before[str(variables)].covers_positions(
             reader_x, reader_y) is False or \
@@ -218,9 +198,7 @@ def get_2DBathy_interp(self, variables, time=None,
                 tmp[:, ind_covered] = env_profiles[var].copy()
                 env_profiles[var] = np.ma.masked_invalid(tmp)
 
-    Bathy=np.transpose(env[variables].data)
+    Bathy= - env[variables]
 
-    if all(Bathy>0):
-        Bathy=-Bathy
 
     return Bathy, env

@@ -19,7 +19,7 @@ import numpy as np
 from datetime import datetime, timedelta
 
 from opendrift.models.opendrift3D import OpenDrift3DSimulation, Lagrangian3DArray
-import Vertical_module as vp
+import Vertical_module as vp ### Functions to use vertical and horizontal diffusivity
 from opendrift.elements import LagrangianArray
 
 
@@ -31,50 +31,53 @@ class PelagicShrimp(Lagrangian3DArray):
     variables = LagrangianArray.add_variables([
         ('diameter', {'dtype': np.float32,
                       'units': 'm',
-                      'default': 0.0003}),  # for A.antennatus
+                      'default': 0.0003}),  # size eggs shrimps
         ('density', {'dtype': np.float32,
                      'units': 'kg/m^3',
-                     'default': 1028.}),
+                     'default': 1028.}),  # density eggs/larvae of shrimp
         ('age_seconds', {'dtype': np.float32,
                          'units': 's',
                          'default': 0.}),
-        ('duration', {'dtype': np.float32,
+        ('duration', {'dtype': np.float32,  # Duration of the crustacean stages
                       'units': 's',
                       'default': 1.74*86400}),
-        ('stages_end_buoyancy', {'dtype': np.int16,
+        ('stages_end_buoyancy', {'dtype': np.int16, # Precise the stage when the buoyancy is no more efficient
                                  'units': '[]',
                                  'default': 2}),
-        ('TotalLength',{'dtype':np.float32,
+        ('TotalLength',{'dtype':np.float32,  # Size of the Post Larvae to use for the swimming /!\ could be explored for younger stages
                         'units':'mm',
                         'default':4.26}),
-        ('particles_velocity',{'dtype':np.float32,
+        ('particles_velocity',{'dtype':np.float32, # Swimming velocity used or not according to the configuration (see later)
                         'units':'m/s',
                         'default':0.}),
-        ('stages', {'dtype': np.int16,
+        ('stages', {'dtype': np.int16, # Stages of the larvae (0 = eggs, e.g.:0=eggs, 1= Nauplius, 2=Protozoea, 3=Mysis, 4= Postlarvae)
                     'units': '[]',
                     'default': 0})])
 
+# Function to change the stages of the larvae if the 'duration' is lower than the time of drift
     def updateEggStages(self):
         self.elements.stages[self.elements.age_seconds >= self.elements.duration] += 1
         self.elements.stages[self.elements.stages>=4] = 4
 
+# Function to compute the duration of the stages according to Temperature of Water. The new duration will be added to the previous,
+# in order to have UpdateEggStages working well.
     def updateEggDuration(self):
         Temperature=self.environment.sea_water_temperature[np.all([self.elements.age_seconds >= self.elements.duration,self.elements.stages < 4],0)]
         B=np.array([1.59, 2.76, 3.77, 3.76])
         stages = np.int16(self.elements.stages[np.all([self.elements.age_seconds >= self.elements.duration,self.elements.stages < 4],0)])
 
-        self.elements.duration[np.all([self.elements.age_seconds >= self.elements.duration,self.elements.stages < 4],0)] += (np.exp(-0.076 * Temperature +B[stages]))*86400
+        self.elements.duration[np.all([self.elements.age_seconds >= self.elements.duration,self.elements.stages < 4],0)] += (np.exp(-0.076 * Temperature +B[stages]))*86400 # Equation can be modified to fit other coefficients in case of PLD = a+b*Temperature. Could be modified to include Salinity
+
 
 
 class PelagicShrimpDrift(OpenDrift3DSimulation, PelagicShrimp):
     """Buoyant particle trajectory model based on the OpenDrift framework.
 
-        Developed at MET Norway
+        Developed at ICM-CSIC (SPAIN), from the original script of PelagicEgg developped at MET, Norway
 
-        Generic module for particles that are subject to vertical turbulent
+        Generic module for particles that are subject to vertical or horizontal turbulent
         mixing with the possibility for positive or negative buoyancy
-
-        Particles could be e.g. oil droplets, plankton, or sediments
+        Based on larval development of decapods (Penaeids)
 
         Under construction.
     """
@@ -90,9 +93,11 @@ class PelagicShrimpDrift(OpenDrift3DSimulation, PelagicShrimp):
                           'sea_water_salinity',
                           'surface_downward_x_stress',
                           'surface_downward_y_stress',
-                          #'turbulent_kinetic_energy',
-                          #'turbulent_generic_length_scale',
-                          'upward_sea_water_velocity','x_wind','y_wind'
+                          'turbulent_kinetic_energy',
+                          'turbulent_generic_length_scale',
+                          'upward_sea_water_velocity',
+                          'ocean_horizontal_diffusivity', ### Added
+                          'surface_boundary_layer'
                           ]
 
     # Vertical profiles of the following parameters will be available in
@@ -102,31 +107,31 @@ class PelagicShrimpDrift(OpenDrift3DSimulation, PelagicShrimp):
     # The vertical levels are available as
     # self.environment_profiles['z'] or
     # self.environment_profiles['sigma'] (not yet implemented)
-    required_profiles = ['sea_water_temperature','sea_water_salinity','ocean_vertical_diffusivity']
+    
+    required_profiles = ['sea_water_temperature','sea_water_salinity','ocean_vertical_diffusivity']#,'ocean_horizontal_diffusivity']
     required_profiles_z_range = [-2000, 0]  # The depth range (in m) which
                                           # profiles shall cover
 
     fallback_values = {'x_sea_water_velocity': 0,
                        'y_sea_water_velocity': 0,
-                       #'sea_surface_wave_significant_height': 0,
                        'land_binary_mask' : 0,
-                       #'sea_ice_area_fraction': 0,
-                       'x_wind': 0, 'y_wind': 0,
                        'sea_floor_depth_below_sea_level': 10,
-                       'ocean_vertical_diffusivity': 0.002,  # m2s-1
+                       'ocean_vertical_diffusivity': 0.002,  # m2.s-1
                        'sea_water_temperature': 12.,
                        'sea_water_salinity': 37.,
                        'surface_downward_x_stress': 0,
                        'surface_downward_y_stress': 0,
-                       #'turbulent_kinetic_energy': 0,
-                       #'turbulent_generic_length_scale': 0,
-                       'upward_sea_water_velocity': 0
+                       'turbulent_kinetic_energy': 0,
+                       'turbulent_generic_length_scale': 0,
+                       'upward_sea_water_velocity': 0,
+                       'ocean_horizontal_diffusivity':1., # m2.s-1
+                       'surface_boundary_layer': -50. # m
                        }
 
     # Configuration
     configspec = '''
         [drift]
-            scheme = string(default='euler')
+            scheme = string(default='runge kunta')
         [processes]
             turbulentmixing = boolean(default=False)
             verticaladvection = boolean(default=True)
@@ -137,6 +142,8 @@ class PelagicShrimpDrift(OpenDrift3DSimulation, PelagicShrimp):
             timestep = float(min=0.1, max=3600, default=1.)
             verticalresolution = float(min=0.01, max=10, default = 1.)
             diffusivitymodel = string(default='environment')
+            moduleturb'= integer(min=0,max=3,default=0)
+            diffusivityhorizontal= option('constant','environnemnt',default='constant')
     '''
 
 
@@ -144,10 +151,13 @@ class PelagicShrimpDrift(OpenDrift3DSimulation, PelagicShrimp):
 
         # Calling general constructor of parent class
         super(PelagicShrimpDrift, self).__init__(*args, **kwargs)
-        self._add_config('processes:verticalmodule', 'boolean(default=False)', comment='buoyancy and swimming')
+        self._add_config('processes:verticalmodule', 'boolean(default=False)', comment='Buoyancy and swimming')
         self._add_config('processes:Settlement', 'boolean(default=False)', comment='Settlement swimming')
-        self._add_config('processes:Buoyancy', 'boolean(default=False)', comment='buoyancy')
-        
+        self._add_config('processes:Buoyancy', 'boolean(default=False)', comment='Buoyancy only')
+        self._add_config('processes:horiz_turbulent','boolean(default=False)',comment='Horizontal diffusivity')
+        self._add_config('turbulentmixing:moduleturb','integer(min=0,max=4,default=0)',comment='Module Diffusivity 0,1,2,3,4')
+        self._add_config('turbulentmixing:diffusivityhorizontal','option(constant,environnment,default=constant)',comment='Module Diffusivity')
+
     def VerticalSettlementSwimming(self):
     # Computing the velocity of PL to go down according to the size of the PL: velocity is Total Length/s
         Larvaestages= self.elements.stages
@@ -217,12 +227,11 @@ class PelagicShrimpDrift(OpenDrift3DSimulation, PelagicShrimp):
         self.elements.age_seconds += self.time_step.total_seconds()
 
         # Turbulent Mixing
-        self.update_terminal_velocity() ### Buoyancy velocity
-        self.VerticalSettlementSwimming()
-        #
-        vp.vertical_mixing(self) #Mixes the eggs according to terminal_velocity calculation
-        if self.get_config('processes:verticalmodule') is True:
-            vp.vertical_module(self)
+        self.update_terminal_velocity() ### Buoyancy velocity updated
+        self.VerticalSettlementSwimming() ### Settlement velocity updated, if module activated
+        vp.vertical_mixing(self) # will be accounted if turbulent mixing is TRUE
+        vp.vertical_module(self) # will be accounted if verticalmodule is TRUE
+        vp.horizontal_mixing(self,'output')
         
         # Plankton development
         self.updateEggStages()

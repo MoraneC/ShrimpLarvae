@@ -15,6 +15,7 @@
 # Copyright 2015, Knut-Frode Dagestad, MET Norway
 
 ### COPIED FROM OPENDRIFT3DSIMULATION the Vertical_Mixing function
+### For applying in a 3D ROMS model
 
 import numpy as np
 import logging
@@ -30,7 +31,7 @@ def vertical_module(self):
     steady-state vertical velocity due to positive or negative
     buoyant behaviour. It is usually a function of particle density,
     diameter, and shape.
-    The formulation of this scheme is copied from LADIM (IMR).
+    The formulation of this scheme is copied from LADIM (IMR) and from OpenDrift Scripts.
     """
     
     if (self.get_config('processes:verticalmodule') is False):
@@ -79,7 +80,6 @@ def vertical_module(self):
     # to horizontal advection
 
     #remember which particles belong to the exact surface
-    surface = self.elements.z == 0
     if self.get_config('processes:Buoyancy') is True:
         # update terminal velocity according to environmental variables
         if self.get_config('turbulentmixing:TSprofiles') is True:
@@ -210,11 +210,13 @@ def vertical_mixing(self):
     logging.debug('turbulent diffusion with binned random walk scheme')
     logging.debug('using ' + str(ntimes_mix) + ' fast time steps of dt=' +
                     str(dt_mix) + 's')
+    depth_t=self.elements.z # depth before the mixing process
+    Condition_MLD=np.where(depth_t < self.environment.surface_boundary_layer)
     for i in range(0, ntimes_mix):
             #remember which particles belong to the exact surface
         surface = self.elements.z == 0
         if self.get_config('processes:Buoyancy') is True:
-            # update terminal velocity according to environmental variables
+            # update terminal velocity according to environmental variables if this module is added.
             if self.get_config('turbulentmixing:TSprofiles') is True:
                 self.update_terminal_velocity(Tprofiles=Tprofiles,
                                               Sprofiles=Sprofiles,
@@ -270,8 +272,12 @@ def vertical_mixing(self):
         RandKick = np.random.random(self.num_elements_active())
         up = np.where(RandKick < p)
         down = np.where(RandKick > 1.0 - q)
-        self.elements.z[up] = self.elements.z[up] + dz # move to layer above
-        self.elements.z[down] = self.elements.z[down] - dz # move to layer underneath
+        if self.get_config('turbulentmixing:moduleturb')==3:
+            self.elements.z[up and Condition_MLD]=self.elements.z[up and Condition_MLD] + dz
+            self.elements.z[down and Condition_MLD] = self.elements.z[down and Condition_MLD] - dz
+        else:
+            self.elements.z[up] = self.elements.z[up] + dz # move to layer above
+            self.elements.z[down] = self.elements.z[down] - dz # move to layer underneath
 
         # put the particles that belong to the surface slick (if present) back to the surface
         self.elements.z[surface] = 0.
@@ -288,4 +294,111 @@ def vertical_mixing(self):
 
     self.timer_end('main loop:updating elements:vertical mixing')
 
+
+def horizontal_mixing(self,method):
+    """Mix particles Horizontally according to eddy diffusivity
+       
+        Horizontal particle displacemend du to turbulent mixing is
+        calculated using the  "random walk scheme"  with a random buffer taken in a Gaussian distribution of mean =0 and standard deviation 1.
+    """
+
+    if self.get_config('processes:horiz_turbulent') is False:
+        logging.debug('Horizontal diffusion deactivated')
+        return
+    depth_t=self.elements.z # depth before the mixing process
+    Condition_MLD=np.where(depth_t > self.environment.surface_boundary_layer)
+
+    if (method=='output'):
+        # get horizontal eddy diffusivity from environment or specific model
+        if (self.get_config('turbulentmixing:diffusivityhorizontal')=='environment'):
+            if 'ocean_horizontal_diffusivity' in self.environment_profiles:
+                Kh = self.environment_profiles['ocean_horizontal_diffusivity']
+                logging.debug('Use diffusivity from ocean model')
+                logging.debug('Diffiusivities are in range %s to %s.' %
+                              (Kh.min(), Kh.max()))
+            else:
+                # NB: using constant diffusivity, and value from first
+                # element only - this should be checked/improved!
+                Kh = self.environment.ocean_horizontal_diffusivity[0] * \
+                        np.ones((len(self.environment_profiles['z']),
+                                 self.num_elements_active()))
+                logging.debug('Use constant diffusivity %s' %(Kh))
+        else:
+            logging.debug('Use given diffusivity')
+            Kh = self.fallback_values['ocean_horizontal_diffusivity']
+
+        if self.get_config('turbulentmixing:moduleturb')==3:
+            sigma_u=np.zeros(self.num_elements_active())
+            sigma_v=p.zeros(self.num_elements_active())
+            sigma_u[Condition_MLD]=np.random.normal(0, 1,sum(Condition_MLD))*np.sqrt(Kh/self.time_step.total_seconds())
+            sigma_v[Condition_MLD]=np.random.normal(0, 1,sum(Condition_MLD))*np.sqrt(Kh/self.time_step.total_seconds())
+        else:
+            sigma_u = np.random.normal(0, 1,self.num_elements_active())*np.sqrt(Kh/self.time_step.total_seconds()) ### According to Okubo, 1971
+            sigma_v = np.random.normal(0, 1,self.num_elements_active())*np.sqrt(Kh/self.time_step.total_seconds()) ### According to Guizien et al. 2006
+
+    if (method=='okubo'):
+        # get horizontal length squares from environment or specific model
+        # Metho Okubo is extracted from Okubo (1971)
+        # It's computing Coefficient of apparent diffusivity Ka from the length scale
+        
+        if (self.get_config('turbulentmixing:diffusivityhorizontal')=='environment'):
+            if 'turbulent_generic_length_scale' in self.environment_profiles:
+                gls = self.environment_profiles['turbulent_generic_length_scale']
+                logging.debug('Use gls from ocean model')
+                logging.debug('GLS are in range %s to %s.' %
+                                  (gls.min(), gls.max()))
+            else:
+                # NB: using constant diffusivity, and value from first
+                # element only - this should be checked/improved!
+                gls = self.environment.turbulent_generic_length_scale[0] * \
+                    np.ones((len(self.environment_profiles['z']),
+                                 self.num_elements_active()))
+                logging.debug('Use constant GLS %s' %(gls))
+        else:
+            logging.debug('Use given GLS')
+            gls = self.fallback_values['turbulent_generic_length_scale']
+
+        Kh=0.0103*(gls**1.15)*(10**-4) # Equation from Okubo is giving Kh in cm/s2 --> conversion in m2/s by *
+
+        if self.get_config('turbulentmixing:moduleturb')==3:
+            sigma_u=np.zeros(self.num_elements_active())
+            sigma_v=np.zeros(self.num_elements_active())
+            sigma_u[Condition_MLD]=np.random.normal(0, 1,sum(Condition_MLD))*np.sqrt(Kh/self.time_step.total_seconds())
+            sigma_v[Condition_MLD]=np.random.normal(0, 1,sum(Condition_MLD))*np.sqrt(Kh/self.time_step.total_seconds())
+        else:
+            sigma_u = np.random.normal(0, 1,self.num_elements_active())*np.sqrt(Kh/self.time_step.total_seconds()) ### According to Okubo, 1971
+            sigma_v = np.random.normal(0, 1,self.num_elements_active())*np.sqrt(Kh/self.time_step.total_seconds()) ### According to Guizien et al. 2006
+
+
+    if (method=='guizien'):
+        # Method Guizien is extracted from Guizien et al. ()
+        # It's supposing that sigma_u and sigma_v are extracted from a Gaussian Distribution (0,sqrt(TKE*2/3)
+        # get TKE from environment or specific model
+        if (self.get_config('turbulentmixing:diffusivityhorizontal')=='environment'):
+            if 'turbulent_kinetic_energy' in self.environment_profiles:
+                TKE = self.environment_profiles['turbulent_kinetic_energy']
+                logging.debug('Use TKE from ocean model')
+                logging.debug('Length scales are in range %s to %s.' %
+                                (TKE.min(), TKE.max()))
+            else:
+                # NB: using constant diffusivity, and value from first
+                # element only - this should be checked/improved!
+                TKE = self.environment.turbulent_kinetic_energy[0] * \
+                    np.ones((len(self.environment_profiles['z']),
+                                 self.num_elements_active()))
+                logging.debug('Use constant TKE %s' %(TKE))
+        else:
+            logging.debug('Use given TKE')
+            TKE = self.fallback_values['turbulent_kinetic_energy']
+
+        if self.get_config('turbulentmixing:moduleturb')==3:
+            sigma_u=np.zeros(self.num_elements_active())
+            sigma_v=p.zeros(self.num_elements_active())
+            sigma_u[Condition_MLD]=np.random.normal(0, np.sqrt(TKE*2/3),sum(Condition_MLD))*self.time_step.total_seconds()
+            sigma_v[Condition_MLD]=np.random.normal(0, np.sqrt(TKE*2/3),sum(Condition_MLD))*self.time_step.total_seconds()
+        else:
+            sigma_u = np.random.normal(0, np.sqrt(TKE*2/3),self.num_elements_active())*self.time_step.total_seconds()
+            sigma_v = np.random.normal(0, np.sqrt(TKE*2/3),self.num_elements_active())*self.time_step.total_seconds()
+
+    self.update_positions(sigma_u, sigma_v)
 
