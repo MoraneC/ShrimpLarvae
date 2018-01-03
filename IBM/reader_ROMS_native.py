@@ -50,14 +50,15 @@ class Reader(BaseReader):
             #'vice': 'sea_ice_y_velocity',
             #'aice': 'sea_ice_area_fraction',
             #'hice': 'sea_ice_thickness',
-            #'gls': 'turbulent_generic_length_scale',
-            #'tke': 'turbulent_kinetic_energy',
+            'gls': 'turbulent_generic_length_scale',
+            'tke': 'turbulent_kinetic_energy',
             'AKt': 'ocean_vertical_diffusivity',
             'sustr': 'surface_downward_x_stress',
             'svstr': 'surface_downward_y_stress',
-            'angle': 'angle_xi_east'}
-            #'Uwind': 'x_wind',
-            #'Vwind': 'y_wind'}
+            'angle': 'angle_xi_east',
+            'Hsbl': 'surface_boundary_layer',
+            'Uwind': 'x_wind',
+            'Vwind': 'y_wind'}
 
         # z-levels to which sigma-layers may be interpolated
         self.zlevels = [
