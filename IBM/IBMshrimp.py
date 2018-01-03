@@ -124,7 +124,7 @@ class PelagicShrimpDrift(OpenDrift3DSimulation, PelagicShrimp):
                        'turbulent_kinetic_energy': 0,
                        'turbulent_generic_length_scale': 0,
                        'upward_sea_water_velocity': 0,
-                       'ocean_horizontal_diffusivity':1., # m2.s-1
+                       'ocean_horizontal_diffusivity':10., # m2.s-1 according to Sayol et al., 2014
                        'surface_boundary_layer': -50. # m
                        }
 
