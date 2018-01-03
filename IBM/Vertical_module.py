@@ -306,7 +306,14 @@ def horizontal_mixing(self,method):
         logging.debug('Horizontal diffusion deactivated')
         return
     depth_t=self.elements.z # depth before the mixing process
-    Condition_MLD=np.where(depth_t > self.environment.surface_boundary_layer)
+
+    if np.shape(self.environment.surface_boundary_layer)==(1,):
+        Condition_MLD=np.where(depth_t > self.environment.surface_boundary_layer)
+    else:
+        MLD,MLD_Profile,Other=self.get_environment(['surface_boundary_layer'],time=self.time,lon=self.elements.lon,
+                                 lat=self.elements.lon,z=None,profiles=None)
+        MLD=np.array(MLD)
+        Condition_MLD=depth_t > MLD.astype(float)
 
     if (method=='output'):
         # get horizontal eddy diffusivity from environment or specific model
@@ -329,7 +336,7 @@ def horizontal_mixing(self,method):
 
         if self.get_config('turbulentmixing:moduleturb')==3:
             sigma_u=np.zeros(self.num_elements_active())
-            sigma_v=p.zeros(self.num_elements_active())
+            sigma_v=np.zeros(self.num_elements_active())
             sigma_u[Condition_MLD]=np.random.normal(0, 1,sum(Condition_MLD))*np.sqrt(Kh/self.time_step.total_seconds())
             sigma_v[Condition_MLD]=np.random.normal(0, 1,sum(Condition_MLD))*np.sqrt(Kh/self.time_step.total_seconds())
         else:
@@ -393,7 +400,7 @@ def horizontal_mixing(self,method):
 
         if self.get_config('turbulentmixing:moduleturb')==3:
             sigma_u=np.zeros(self.num_elements_active())
-            sigma_v=p.zeros(self.num_elements_active())
+            sigma_v=np.zeros(self.num_elements_active())
             sigma_u[Condition_MLD]=np.random.normal(0, np.sqrt(TKE*2/3),sum(Condition_MLD))*self.time_step.total_seconds()
             sigma_v[Condition_MLD]=np.random.normal(0, np.sqrt(TKE*2/3),sum(Condition_MLD))*self.time_step.total_seconds()
         else:
