@@ -1,4 +1,4 @@
-# This file is part of OpenDrift.
+ # This file is part of OpenDrift.
 #
 # OpenDrift is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -19,10 +19,12 @@
 
 import numpy as np
 import logging
+import pyproj
 from scipy.interpolate import interp1d
 from opendrift.models.basemodel import OpenDriftSimulation
 from opendrift.elements import LagrangianArray
 from opendrift.models.opendrift3D import OpenDrift3DSimulation
+
 
 def vertical_module(self):
     """Give to particles a  vertical speed according to buoyancy or settlement velocity at PL
@@ -38,16 +40,11 @@ def vertical_module(self):
         logging.debug('Vertical module deactivated.')
         return
 
-    self.timer_start('main loop:updating elements: Vertical Module')
-
     dt = self.time_step.total_seconds()
 
     # minimum height/maximum depth for each particle
     Zmin = -1.*self.environment.sea_floor_depth_below_sea_level
 
-    # place particle in center of bin
-    surface = self.elements.z == 0
-    self.elements.z[~surface] = np.round(self.elements.z[~surface])
 
     #avoid that elements are below bottom
     bottom = np.where(self.elements.z < Zmin)
@@ -94,63 +91,48 @@ def vertical_module(self):
         logging.debug('Terminal Velocity is ' + str(np.mean(self.elements.terminal_velocity)))
     else:
         w = 0
+
     if self.get_config('processes:Settlement') is True: # Personal added line to make particles going in the vertical layer, now, just a constant velocity activated at PostLarvae stages.
         w += self.elements.particles_velocity
-        logging.debug('Settlement Velocity is' + str(np.mean(self.elements.particles_velocity)))
+        logging.debug('Larval Velocity is ' + str(np.mean(self.elements.particles_velocity)))
 
 
     self.elements.z = self.elements.z + dt*w # move according to buoyancy and/or settlement velocity.
 
+    surface = np.where(self.elements.z > 0)
     # put the particles that belong to the surface slick (if present) back to the surface
     self.elements.z[surface] = 0.
 
     #avoid that elements are below bottom
     bottom = np.where(self.elements.z < Zmin)
+
     if len(bottom[0]) > 0:
         self.elements.z[bottom] = np.round(Zmin[bottom]) + 0.5
 
-    # Call surface interaction:
-    # reflection at surface or formation of slick and wave mixing if implemented for this class
-    self.surface_interaction(dt)
 
 
 def vertical_mixing(self):
-    """Mix particles vertically according to eddy diffusivity, buoyancy and Settlement Velocity of PL
+    """Mix particles vertically according to eddy diffusivity and buoyancy
+            Buoyancy is expressed as terminal velocity, which is the
+            steady-state vertical velocity due to positive or negative
+            buoyant behaviour. It is usually a function of particle density,
+            diameter, and shape.
 
-        Buoyancy is expressed as terminal velocity, which is the
-        steady-state vertical velocity due to positive or negative
-        buoyant behaviour. It is usually a function of particle density,
-        diameter, and shape.
-
-        Vertical particle displacemend du to turbulent mixing is
-        calculated using the "binned random walk scheme" (Thygessen and
-        Aadlandsvik, 2007).
-        The formulation of this scheme is copied from LADIM (IMR).
+            Vertical particle displacemend du to turbulent mixing is
+            calculated using a random walk scheme" (Visser et al. 1996)
     """
 
     if self.get_config('processes:turbulentmixing') is False:
-        logging.debug('Turbulent mixing deactivated.')
+        logging.debug('Turbulent mixing deactivated')
         return
 
     self.timer_start('main loop:updating elements:vertical mixing')
     from opendrift.models import eddydiffusivity
 
-    dz = self.get_config('turbulentmixing:verticalresolution')
-    dz = np.float32(dz)  # Convert to avoid error for older numpy
     dt_mix = self.get_config('turbulentmixing:timestep')
 
     # minimum height/maximum depth for each particle
     Zmin = -1.*self.environment.sea_floor_depth_below_sea_level
-
-    # place particle in center of bin
-    surface = self.elements.z == 0
-    self.elements.z[~surface] = np.round(self.elements.z[~surface]/dz)*dz
-
-    # Prevent elements to go below seafloor
-    bottom = np.where(self.elements.z < Zmin)
-    if len(bottom[0]) > 0:
-        logging.debug('%s elements penetrated seafloor, lifting up' % len(bottom[0]))
-        self.elements.z[bottom] = np.round(Zmin[bottom]/dz)*dz + dz/2.
 
     # Eventual model specific preparions
     self.prepare_vertical_mixing()
@@ -162,7 +144,7 @@ def vertical_mixing(self):
         if 'ocean_vertical_diffusivity' in self.environment_profiles:
             Kprofiles = self.environment_profiles[
                 'ocean_vertical_diffusivity']
-            logging.debug('use diffusivity from ocean model')
+            logging.debug('Using diffusivity from ocean model')
         else:
             # NB: using constant diffusivity, and value from first
             # element only - this should be checked/improved!
@@ -170,14 +152,14 @@ def vertical_mixing(self):
                 self.environment.ocean_vertical_diffusivity[0] * \
                 np.ones((len(self.environment_profiles['z']),
                             self.num_elements_active()))
-            logging.debug('use constant diffusivity')
+            logging.debug('Using constant diffusivity')
     else:
-        logging.debug('use functional expression for diffusivity')
+        logging.debug('Using functional expression for diffusivity')
         Kprofiles = getattr(
             eddydiffusivity,
             self.get_config('turbulentmixing:diffusivitymodel'))(self)
 
-    logging.debug('Diffiusivities are in range %s to %s.' %
+    logging.debug('Diffiusivities are in range %s to %s' %
                     (Kprofiles.min(), Kprofiles.max()))
 
     # get profiles of salinity and temperature
@@ -189,51 +171,53 @@ def vertical_mixing(self):
             self.environment_profiles['sea_water_temperature']
         if ('sea_water_salinity' in self.fallback_values and
             Sprofiles.min() == Sprofiles.max()):
-            logging.debug('Salinity and temperature are fallback values, '
-                            'skipping TSprofile')
+            logging.debug('Salinity and temperature are fallback'
+                            'values, skipping TSprofile')
             Sprofiles = None
             Tprofiles = None
+        else:
+            logging.debug('Using TSprofiles for vertical mixing')
     else:
+        logging.debug('TSprofiles deactivated for vertical mixing')
         Sprofiles = None
         Tprofiles = None
 
     # prepare vertical interpolation coordinates
-    z_i = range(Kprofiles.shape[0])
+    #z_i = range(Kprofiles.shape[0])
+    z_i = range(self.environment_profiles['z'].shape[0])
+    #print len(self.environment_profiles['z']), len(z_i)
     z_index = interp1d(-self.environment_profiles['z'],
                         z_i, bounds_error=False,
                         fill_value=(0,len(z_i)-1))  # Extrapolation
+
     # internal loop for fast time step of vertical mixing model
-    # binned random walk needs faster time step compared
+    # random walk needs faster time step compared
     # to horizontal advection
-    ntimes_mix = np.abs(int(self.time_step.total_seconds()/dt_mix))
     logging.debug('Vertical mixing module:')
-    logging.debug('turbulent diffusion with binned random walk scheme')
-    logging.debug('using ' + str(ntimes_mix) + ' fast time steps of dt=' +
-                    str(dt_mix) + 's')
-    depth_t=self.elements.z # depth before the mixing process
-    Condition_MLD=np.where(depth_t < self.environment.surface_boundary_layer)
+    ntimes_mix = np.abs(int(self.time_step.total_seconds()/dt_mix))
+    logging.debug('Turbulent diffusion with random walk '
+                    'scheme using ' + str(ntimes_mix) +
+                    ' fast time steps of dt=' + str(dt_mix) + 's')
+
     for i in range(0, ntimes_mix):
-            #remember which particles belong to the exact surface
+        #remember which particles belong to the exact surface
         surface = self.elements.z == 0
-        if self.get_config('processes:Buoyancy') is True:
-            # update terminal velocity according to environmental variables if this module is added.
-            if self.get_config('turbulentmixing:TSprofiles') is True:
-                self.update_terminal_velocity(Tprofiles=Tprofiles,
-                                              Sprofiles=Sprofiles,
-                                              z_index=z_index)
-            else:
-                # this is faster, but ignores density gradients in
-                # water column for the inner loop
-                self.update_terminal_velocity()
 
-            w = self.elements.terminal_velocity
+        # update terminal velocity according to environmental variables
+        if self.get_config('turbulentmixing:TSprofiles') is True:
+            self.update_terminal_velocity(Tprofiles=Tprofiles,
+                                            Sprofiles=Sprofiles,
+                                            z_index=z_index)
         else:
-            w = 0
-        if self.get_config('processes:Settlement') is True:
-            w += self.elements.particles_velocity
+            # this is faster, but ignores density gradients in
+            # water column for the inner loop
+            self.update_terminal_velocity()
 
-        # diffusivity K at depth z
-        zi = z_index(-self.elements.z)
+        w = self.elements.terminal_velocity
+
+        # diffusivity K at depth z+dz
+        dz = 1e-3
+        zi = z_index(-self.elements.z+0.5*dz)
         upper = np.maximum(np.floor(zi).astype(np.int), 0)
         lower = np.minimum(upper+1, Kprofiles.shape[0]-1)
         weight_upper = 1 - (zi - upper)
@@ -243,9 +227,8 @@ def vertical_mixing(self):
             Kprofiles[lower, range(Kprofiles.shape[1])] * \
             (1-weight_upper)
 
-        # K at depth z-dz ; gradient of K is required for correct
-        # solution with random walk scheme
-        zi = z_index(-(self.elements.z-dz))
+        # diffusivity K at depth z-dz
+        zi = z_index(-self.elements.z-0.5*dz)
         upper = np.maximum(np.floor(zi).astype(np.int), 0)
         lower = np.minimum(upper+1, Kprofiles.shape[0]-1)
         weight_upper = 1 - (zi - upper)
@@ -255,44 +238,66 @@ def vertical_mixing(self):
             Kprofiles[lower, range(Kprofiles.shape[1])] * \
             (1-weight_upper)
 
-        # calculate rise/sink probability dependent on K and w
-        p = dt_mix * (2.0*K1 + dz*w)/(2.0*dz*dz)  # probability to rise
-        q = dt_mix * (2.0*K2 - dz*w)/(2.0*dz*dz)  # probability to sink
+        # diffusivity gradient
+        dKdz = (K1 - K2) / dz
 
-        # check if probabilities are reasonable or wrong; which can happen if K is very high (K>0.1)
-        wrong = p+q > 1.00002
-        if wrong.sum() > 0:
-            logging.info('WARNING! '+str(wrong.sum())+' elements have p+q>1; you might need a smaller mixing time step')
-            # fixing p and q by scaling them to assure p+q<1:
-            norm = p+q
-            p[wrong] = p[wrong]/norm[wrong]
-            q[wrong] = q[wrong]/norm[wrong]
+        # K at depth z+dKdz*dt/2
+        zi = z_index(-(self.elements.z+dKdz*dt_mix/2))
+        upper = np.maximum(np.floor(zi).astype(np.int), 0)
+        lower = np.minimum(upper+1, Kprofiles.shape[0]-1)
+        weight_upper = 1 - (zi - upper)
+        weight_upper[np.isnan(weight_upper)] = 1
+        K3 = Kprofiles[upper, range(Kprofiles.shape[1])] * \
+            weight_upper + \
+            Kprofiles[lower, range(Kprofiles.shape[1])] * \
+            (1-weight_upper)
 
-        # use probabilities to mix some particles up or down
-        RandKick = np.random.random(self.num_elements_active())
-        up = np.where(RandKick < p)
-        down = np.where(RandKick > 1.0 - q)
+
+        # Visser et al. 1996 random walk mixing
+        # requires an inner loop time step dt such that
+        # dt << (d2K/dz2)^-1, e.g. typically dt << 15min
+        R = 2*np.random.random(self.num_elements_active()) - 1
+        r = 1.0/3
+
+        depth_t=self.elements.z # depth before the mixing process ADDED
+        Condition_MLD=np.where(depth_t < self.environment.surface_boundary_layer)
+        # new position  =  old position   - up_K_flux   + random walk
         if self.get_config('turbulentmixing:moduleturb')==3:
-            self.elements.z[up and Condition_MLD]=self.elements.z[up and Condition_MLD] + dz
-            self.elements.z[down and Condition_MLD] = self.elements.z[down and Condition_MLD] - dz
+            self.elements.z[Condition_MLD]=self.elements.z[Condition_MLD]- dKdz[Condition_MLD]*dt_mix + R[Condition_MLD]*np.sqrt(( K3[Condition_MLD]*dt_mix*2/r))
         else:
-            self.elements.z[up] = self.elements.z[up] + dz # move to layer above
-            self.elements.z[down] = self.elements.z[down] - dz # move to layer underneath
+            self.elements.z = self.elements.z - dKdz*dt_mix + R*np.sqrt(( K3*dt_mix*2/r))
+ 
+        # Reflect from surface
+        reflect = np.where(self.elements.z >= 0)
+        if len(reflect[0]) > 0:
+            self.elements.z[reflect] = -self.elements.z[reflect]
 
-        # put the particles that belong to the surface slick (if present) back to the surface
-        self.elements.z[surface] = 0.
-
-        # Prevent elements to go below seafloor
+        # reflect elements going below seafloor
         bottom = np.where(self.elements.z < Zmin)
         if len(bottom[0]) > 0:
             logging.debug('%s elements penetrated seafloor, lifting up' % len(bottom[0]))
-            self.elements.z[bottom] = np.round(Zmin[bottom]/dz)*dz + dz/2.
+            self.elements.z[bottom] = 2*Zmin[bottom] - self.elements.z[bottom]
 
-        # Call surface interaction:
-        # reflection at surface or formation of slick and wave mixing if implemented for this class
-        self.surface_interaction(dt_mix)
+        if self.get_config('processes:Buoyancy') is True: #### added
+            # advect due to buoyancy
+            self.elements.z = self.elements.z + w*dt_mix
 
+            # put the particles that belonged to the surface slick (if present) back to the surface
+        self.elements.z[surface] = 0.
+
+            # formation of slick and wave mixing for surfaced particles if implemented for this class
+        self.surface_stick()
+        self.surface_wave_mixing(dt_mix)
+
+            # let particles stick to bottom 
+        bottom = np.where(self.elements.z < Zmin)
+        if len(bottom[0]) > 0:
+            logging.debug('%s elements reached seafloor, set to bottom' % len(bottom[0]))
+            self.elements.z[bottom] = Zmin[bottom]
+ 
     self.timer_end('main loop:updating elements:vertical mixing')
+
+
 
 
 def horizontal_mixing(self,method):
@@ -307,13 +312,9 @@ def horizontal_mixing(self,method):
         return
     depth_t=self.elements.z # depth before the mixing process
 
-    if np.shape(self.environment.surface_boundary_layer)==(1,):
-        Condition_MLD=np.where(depth_t > self.environment.surface_boundary_layer)
-    else:
-        MLD,MLD_Profile,Other=self.get_environment(['surface_boundary_layer'],time=self.time,lon=self.elements.lon,
-                                 lat=self.elements.lon,z=None,profiles=None)
-        MLD=np.array(MLD)
-        Condition_MLD=depth_t > MLD.astype(float)
+    MLD=self.environment.surface_boundary_layer
+    MLD=np.array(MLD)
+    Condition_MLD=depth_t > MLD.astype(float)
 
     if (method=='output'):
         # get horizontal eddy diffusivity from environment or specific model
@@ -337,11 +338,15 @@ def horizontal_mixing(self,method):
         if self.get_config('turbulentmixing:moduleturb')==3:
             sigma_u=np.zeros(self.num_elements_active())
             sigma_v=np.zeros(self.num_elements_active())
-            sigma_u[Condition_MLD]=np.random.normal(0, 1,sum(Condition_MLD))*np.sqrt(Kh/self.time_step.total_seconds())
-            sigma_v[Condition_MLD]=np.random.normal(0, 1,sum(Condition_MLD))*np.sqrt(Kh/self.time_step.total_seconds())
+            np.random.seed()
+            sigma_u[Condition_MLD]=np.random.normal(0, 1,sum(Condition_MLD))*np.sqrt(2.*Kh/self.time_step.total_seconds())
+            np.random.seed()
+            sigma_v[Condition_MLD]=np.random.normal(0, 1,sum(Condition_MLD))*np.sqrt(2.*Kh/self.time_step.total_seconds())
         else:
-            sigma_u = np.random.normal(0, 1,self.num_elements_active())*np.sqrt(Kh/self.time_step.total_seconds()) ### According to Okubo, 1971
-            sigma_v = np.random.normal(0, 1,self.num_elements_active())*np.sqrt(Kh/self.time_step.total_seconds()) ### According to Guizien et al. 2006
+            np.random.seed()
+            sigma_u = np.random.normal(0, 1,self.num_elements_active())*np.sqrt(2.*Kh/self.time_step.total_seconds()) ### According to Okubo, 1971
+            np.random.seed()
+            sigma_v = np.random.normal(0, 1,self.num_elements_active())*np.sqrt(2.*Kh/self.time_step.total_seconds()) ### According to Guizien et al. 2006
 
     if (method=='okubo'):
         # get horizontal length squares from environment or specific model
@@ -365,16 +370,20 @@ def horizontal_mixing(self,method):
             logging.debug('Use given GLS')
             gls = self.fallback_values['turbulent_generic_length_scale']
 
-        Kh=0.0103*(gls**1.15)*(10**-4) # Equation from Okubo is giving Kh in cm/s2 --> conversion in m2/s by *
+        Kh= 10.0 #0.0103*(2000**1.15)*(10**-4) # Equation from Okubo is giving Kh in cm/s2 --> conversion in m2/s by *
 
         if self.get_config('turbulentmixing:moduleturb')==3:
             sigma_u=np.zeros(self.num_elements_active())
             sigma_v=np.zeros(self.num_elements_active())
-            sigma_u[Condition_MLD]=np.random.normal(0, 1,sum(Condition_MLD))*np.sqrt(Kh/self.time_step.total_seconds())
-            sigma_v[Condition_MLD]=np.random.normal(0, 1,sum(Condition_MLD))*np.sqrt(Kh/self.time_step.total_seconds())
+            np.random.seed()
+            sigma_u[Condition_MLD]=np.random.uniform(0, 1,sum(Condition_MLD))*np.sqrt(2.*Kh/np.abs(self.time_step.total_seconds()))
+            np.random.seed()
+            sigma_v[Condition_MLD]=np.random.uniform(0, 1,sum(Condition_MLD))*np.sqrt(2.*Kh/np.abs(self.time_step.total_seconds()))
         else:
-            sigma_u = np.random.normal(0, 1,self.num_elements_active())*np.sqrt(Kh/self.time_step.total_seconds()) ### According to Okubo, 1971
-            sigma_v = np.random.normal(0, 1,self.num_elements_active())*np.sqrt(Kh/self.time_step.total_seconds()) ### According to Guizien et al. 2006
+            np.random.seed()
+            sigma_u = np.random.uniform(0, 1,self.num_elements_active())*np.sqrt(Kh/np.abs(self.time_step.total_seconds())) ### According to Okubo, 1971
+            np.random.seed()
+            sigma_v = np.random.uniform(0, 1,self.num_elements_active())*np.sqrt(Kh/np.abs(self.time_step.total_seconds())) ### According to Guizien et al. 2006
 
 
     if (method=='guizien'):
@@ -401,11 +410,17 @@ def horizontal_mixing(self,method):
         if self.get_config('turbulentmixing:moduleturb')==3:
             sigma_u=np.zeros(self.num_elements_active())
             sigma_v=np.zeros(self.num_elements_active())
-            sigma_u[Condition_MLD]=np.random.normal(0, np.sqrt(TKE*2/3),sum(Condition_MLD))*self.time_step.total_seconds()
-            sigma_v[Condition_MLD]=np.random.normal(0, np.sqrt(TKE*2/3),sum(Condition_MLD))*self.time_step.total_seconds()
+            np.random.seed()
+            sigma_u[Condition_MLD]=np.random.normal(0, np.sqrt(TKE*2/3),sum(Condition_MLD))*np.abs(self.time_step.total_seconds())
+            np.random.seed()
+            sigma_v[Condition_MLD]=np.random.normal(0, np.sqrt(TKE*2/3),sum(Condition_MLD))*np.abs(self.time_step.total_seconds())
         else:
-            sigma_u = np.random.normal(0, np.sqrt(TKE*2/3),self.num_elements_active())*self.time_step.total_seconds()
-            sigma_v = np.random.normal(0, np.sqrt(TKE*2/3),self.num_elements_active())*self.time_step.total_seconds()
+            np.random.seed()
+            sigma_u = np.random.normal(0, np.sqrt(TKE*2/3),self.num_elements_active())*np.abs(self.time_step.total_seconds())
+            np.random.seed()
+            sigma_v = np.random.normal(0, np.sqrt(TKE*2/3),self.num_elements_active())*np.abs(self.time_step.total_seconds())
 
-    self.update_positions(sigma_u, sigma_v)
+#self.update_positions(sigma_u,sigma_v)
 
+    self.environment.x_sea_water_velocity += sigma_u
+    self.environment.x_sea_water_velocity += sigma_v
